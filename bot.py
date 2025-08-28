@@ -743,77 +743,107 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Download fresh video
     await processing_msg.edit_text("⏳ Downloading video... This may take a moment.")
     
-    try:
-        loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            video_path, title = await loop.run_in_executor(
-                executor, download_video, url, platform
-            )
+         try:
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                video_path, title = await loop.run_in_executor(
+                    executor, download_video, url, platform
+                )
         
-                if not video_path or not os.path.exists(video_path):
-            await processing_msg.edit_text("❌ Failed to download video. Please try again later.")
+            # CORRECTED INDENTATION - this line was misaligned
+            if not video_path or not os.path.exists(video_path):
+                await processing_msg.edit_text("❌ Failed to download video. Please try again later.")
+                
+                # Track failed request
+                processing_time = (datetime.now() - start_time).total_seconds()
+                analytics.track_video_request(
+                    user_id, url, platform, 'failed', 
+                    None, 0, processing_time, "Download failed"
+                )
+                analytics.update_daily_active_users()
+                return
             
-            # Track failed request
+            # Check file size
+            file_size = os.path.getsize(video_path)
+            if file_size > MAX_FILE_SIZE:
+                await processing_msg.edit_text(
+                    f"❌ Video is too large ({file_size / 1024 / 1024:.1f}MB). "
+                    f"Maximum size is {MAX_FILE_SIZE / 1024 / 1024}MB."
+                )
+                
+                # Track failed request
+                processing_time = (datetime.now() - start_time).total_seconds()
+                analytics.track_video_request(
+                    user_id, url, platform, 'failed', 
+                    title, file_size, processing_time, "File too large"
+                )
+                analytics.update_daily_active_users()
+                
+                # Cleanup
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+                return
+            
+            # Store in cache and get file_id
+            await processing_msg.edit_text("📤 Uploading video...")
+            
+            file_id, stored_size = await video_storage.store_video(url, video_path, title, platform)
+            
+            # Send to user
+            await update.message.reply_video(
+                video=file_id,
+                caption=f"✅ {title}\n📱 From {platform.title()}\n🤖 @{BOT_USERNAME}",
+                supports_streaming=True
+            )
+            
+            await processing_msg.delete()
+            
+            # Track successful request
             processing_time = (datetime.now() - start_time).total_seconds()
             analytics.track_video_request(
-                user_id, url, platform, 'failed', 
-                None, 0, processing_time, "Download failed"
-            )
-            analytics.update_daily_active_users()
-            return
-        
-        # Check file size
-        file_size = os.path.getsize(video_path)
-        if file_size > MAX_FILE_SIZE:
-            await processing_msg.edit_text(
-                f"❌ Video is too large ({file_size / 1024 / 1024:.1f}MB). "
-                f"Maximum size is {MAX_FILE_SIZE / 1024 / 1024}MB."
-            )
-            
-            # Track failed request
-            processing_time = (datetime.now() - start_time).total_seconds()
-            analytics.track_video_request(
-                user_id, url, platform, 'failed', 
-                title, file_size, processing_time, "File too large"
+                user_id, url, platform, 'success', 
+                title, stored_size, processing_time
             )
             analytics.update_daily_active_users()
             
-            # Cleanup
+            # Cleanup temp files
             if os.path.exists(video_path):
                 os.remove(video_path)
-            return
-        
-        # Store in cache and get file_id
-        await processing_msg.edit_text("📤 Uploading video...")
-        
-        file_id, stored_size = await video_storage.store_video(url, video_path, title, platform)
-        
-        # Send to user
-        await update.message.reply_video(
-            video=file_id,
-            caption=f"✅ {title}\n📱 From {platform.title()}\n🤖 @{BOT_USERNAME}",
-            supports_streaming=True
-        )
-        
-        await processing_msg.delete()
-        
-        # Track successful request
-        processing_time = (datetime.now() - start_time).total_seconds()
-        analytics.track_video_request(
-            user_id, url, platform, 'success', 
-            title, stored_size, processing_time
-        )
-        analytics.update_daily_active_users()
-        
-        # Cleanup temp files
-        if os.path.exists(video_path):
-            os.remove(video_path)
-            temp_dir = os.path.dirname(video_path)
-            if os.path.exists(temp_dir):
-                try:
-                    os.rmdir(temp_dir)
-                except:
-                    pass
+                temp_dir = os.path.dirname(video_path)
+                if os.path.exists(temp_dir):
+                    try:
+                        os.rmdir(temp_dir)
+                    except:
+                        pass
+            
+        except Exception as e:
+            logger.error(f"Error processing video: {e}")
+            
+            try:
+                await processing_msg.edit_text(
+                    "❌ An error occurred while processing your request. Please try again."
+                )
+            except:
+                pass
+            
+            # Track failed request
+            processing_time = (datetime.now() - start_time).total_seconds()
+            analytics.track_video_request(
+                user_id, url, platform, 'failed', 
+                None, 0, processing_time, str(e)
+            )
+            analytics.update_daily_active_users()
+            
+            # Cleanup on error
+            if 'video_path' in locals() and video_path and os.path.exists(video_path):
+                os.remove(video_path)
+                temp_dir = os.path.dirname(video_path)
+                if os.path.exists(temp_dir):
+                    try:
+                        os.rmdir(temp_dir)
+                    except:
+                        pass
+
         
     except Exception as e:
         logger.error(f"Error processing video: {e}")
