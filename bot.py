@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
+# Configurations
 BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 BOT_USERNAME = "eyysavebot"
 STORAGE_CHAT_ID = os.getenv("STORAGE_CHAT_ID", "-1001234567890")  # Private channel for video storage
